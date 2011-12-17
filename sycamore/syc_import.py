@@ -3,6 +3,29 @@ This script is a hack.  It's an absolute mess.  Thankfully, it works.
 And you just need to run this once, so who cares!
 
 This will import a Sycamore dump, as provided by export.py, into sapling.
+
+To use:
+
+  0. Get localwiki up and running.  THIS SCRIPT WILL **WIPE ALL DATA** in the localwiki
+     install its run against, so DO NOT run this script against a site with real content
+     in it!
+  1. Add django_extensions to your LOCAL_INSTALLED_APPS in localsettings.py.
+     And install django_extensions (pip install django-extensions in your virtualenv)
+  2. Make a directory called "scripts" inside the sapling/ project directory and move
+     this file into it.
+  3. Find the directory your "Sycamore" code directory lives inside of.  Change
+     SYCAMORE_CODE_PATH to point there.
+  4. Copy sycamore_scripts/export.py and sycamore_scripts/user_export.py into
+     your Sycamore/ directory.
+  5. From your Sycamore/ directory, run python export.py.  Do the admin dump.  You'll now
+     have an XML file in the Sycamore/ directory containing a Sycamore XML export.
+  6. From your Sycamore/ directory, run python user_export.py.  You'll now have an XML
+     file in the Sycamore/ directory containing a Sycamore XML user export.
+  7. Run localwiki-manage runscript syc_import --script-args=/path/to/the/dump.xml /path/to/the/user.dump.xml
+
+You'll then have an import of the old Sycamore site!  User accounts are moved over
+but passwords aren't.  Users will have to reset their password in order to sign in
+for now.  We could fix this.
 """
 
 import sys
@@ -18,8 +41,9 @@ from maps.models import MapData
 from redirects.models import Redirect
 from django.contrib.gis.geos import Point, MultiPoint
 from django.core.files.base import ContentFile
+from django.db import transaction
 
-SYCAMORE_CODE_PATH = '/home/philip/sycamore/'
+SYCAMORE_CODE_PATH = '/home/philip/sycamore'
 sys.path.append(SYCAMORE_CODE_PATH)
 
 from Sycamore import security as sycamore_security
@@ -124,7 +148,7 @@ def parse_include_args(args):
     if have_more_args:
         args = args[re_args.end('name1'):]
     else:
-        args = ''
+        irgs = ''
     re_args = re.search('"(?P<heading>.*)"', args)
     if re_args:
         heading = re_args.group('heading')
@@ -540,6 +564,22 @@ class Formatter(sycamore_HTMLFormatter):
         include_html = """<a%(width_style)s href="%(quoted_pagename)s" class="plugin includepage%(include_classes)s">Include page %(pagename)s</a></p>""" % d
         return include_html
 
+    def process_mailto_macro(self, macro_obj, name, args):
+        from Sycamore.util.mail import decodeSpamSafeEmail
+
+        args = args or ''
+        if args.find(',') == -1:
+            email = args
+            text = ''
+        else:
+            email, text = args.split(',', 1)
+
+        email, text = email.strip(), text.strip()
+
+        # decode address and generate mailto: link
+        email = decodeSpamSafeEmail(email)
+
+        return '<a href="mailto:%s">%s</a>' % (email, email)
 
     def process_address_macro(self, macro_obj, name, args):
         address = render_wikitext(args, strong=False, page_slug=self.page_slug)
@@ -554,6 +594,7 @@ class Formatter(sycamore_HTMLFormatter):
             'include': self.process_include_macro,
             'nbsp': self.process_nbsp_macro,
             'address': self.process_address_macro,
+            'mailto': self.process_mailto_macro,
         }
         if name.lower() in macro_processors:
             return macro_processors[name.lower()](macro_obj, name, args)
@@ -917,13 +958,27 @@ def kill_empty_headings(s):
     return s
 
 
-def fix_indented_tables(s):
-    r = re.search('(?P<list><ul>\s*(?P<table><table>.*?</table>)\s*</ul>)', s, re.DOTALL)
-    while r:
-        # Remove the <ul> surrounding the <table>
-        s = s[:r.start('list')] + r.group('table') + s[r.end('list'):]
-        r = re.search('(?P<list><ul>\s*(?P<table><table>.*?</table>)\s*</ul>)', s, re.DOTALL)
-    return s
+def remove_ridicilous_indents(s):
+    # remove <ul> that surrounds anything that isn't
+    # an <li> or a <p>
+    import html5lib
+    p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
+            tree=html5lib.treebuilders.getTreeBuilder("lxml"),
+            namespaceHTMLElements=False)
+    top_level_elems = p.parseFragment(s, encoding='UTF-8')
+    new_top_level = []
+    for e in top_level_elems:
+        if isinstance(e, basestring):
+            new_top_level.append(e)
+            continue
+        if e.tag == 'ul':
+            children = list(e.iterchildren())
+            if children and children[0] != 'li' and children[0] != 'p':
+                # push everything to the top-level
+                new_top_level += children
+                continue
+        new_top_level.append(e)
+    return _convert_to_string(new_top_level)
 
 
 def tidy_html(s):
@@ -937,7 +992,7 @@ def tidy_html(s):
     s = re.sub('<em>\s*</em>\n?', '', s)
 
     s = wrap_top_level_images(s)
-    s = fix_indented_tables(s)
+    s = remove_ridicilous_indents(s)
     s = fix_threaded_indents(s)
     s = kill_empty_headings(s)
 
@@ -999,11 +1054,11 @@ def create_page(page_elem, text_elem):
         # render error
         return
     html = render_wikitext(wikitext, page_slug=slugify(name))
-    if wikitext and wikitext.strip().startswith('#redirect'):
+    if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
     	from_page = name
-    	to_page = line[line.find('#redirect')+10:]
+    	to_page = line[line.lower().find('#redirect')+10:]
         redirects.append((from_page, to_page))
         # skip page creation
         return
@@ -1075,11 +1130,11 @@ def create_page_version(version_elem, text_elem):
     except:
         # render error
         return
-    if wikitext and wikitext.strip().startswith('#redirect'):
+    if wikitext and wikitext.strip().lower().startswith('#redirect'):
         # Page is a redirect
         line = wikitext.strip()
     	from_page = name
-    	to_page = line[line.find('#redirect')+10:]
+    	to_page = line[line.lower().find('#redirect')+10:]
         html = '<p>This version of the page was a redirect.  See <a href="%s">%s</a>.</p>' % (to_page, to_page)
     if not html or not html.strip():
         return
@@ -1304,6 +1359,7 @@ def process_element(element, just_pages, exclude_pages, just_maps):
             print "imported historical file %s on page %s" % (filename, normalize_pagename(element.attrib.get('attached_to_pagename')))
 
 
+@transaction.commit_on_success
 def import_from_export_file(f, just_pages=False, exclude_pages=False, just_maps=False):
     for event, element in etree.iterparse(f, events=("start", "end"), encoding='utf-8', huge_tree=True):
         if event == 'start':
@@ -1336,6 +1392,7 @@ def users_import_from_export_file(f):
                 previous_sibling = element.getprevious()
 
 
+@transaction.commit_on_success
 def clear_out_everything():
     from django.contrib.auth.models import User
     #for p in User.objects.all():
@@ -1385,6 +1442,7 @@ def process_redirects():
         except Page.DoesNotExist:
             print "Error creating redirect: %s --> %s" % (from_pagename, to_pagename)
             print "  (page %s does not exist)" % to_pagename
+            continue
 
         if slugify(from_pagename) == to_page.slug:
             continue
