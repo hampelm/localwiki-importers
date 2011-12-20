@@ -4,8 +4,20 @@ from wikitools import *
 from django.contrib.auth.models import User
 
 from pages.models import Page, slugify
+from redirects.models import Redirect
 
 site = wiki.Wiki('http://127.0.0.1/mediawiki-1.16.0/api.php')
+redirects = []
+
+
+def get_robot_user():
+    try:
+        u = User.objects.get(username="LocalWikiRobot")
+    except User.DoesNotExist:
+        u = User(name='LocalWiki Robot', username='LocalWikiRobot',
+                 email='editrobot@localwiki.org')
+        u.save()
+    return u
 
 
 def import_users():
@@ -32,9 +44,44 @@ def import_users():
         u.save()
 
 
-def handle_redirect(page):
-    # TODO
-    pass
+def add_redirect(page):
+    global redirects
+
+    request = api.APIRequest(site, {
+        'action': 'parse',
+        'title': page.title,
+        'text': page.wikitext,
+    })
+    links = request.query()['parse']['links']
+    if not links:
+        return
+    to_pagename = links[0]['*']
+
+    redirects.append((page.title, to_pagename))
+
+
+def process_redirects():
+    # We create the Redirects here.  We don't try and port over the
+    # version information for the formerly-page-text-based redirects.
+    global redirects
+
+    u = get_robot_user()
+
+    for from_pagename, to_pagename in redirects:
+        try:
+            to_page = Page.objects.get(slug=slugify(to_pagename))
+        except Page.DoesNotExist:
+            print "Error creating redirect: %s --> %s" % (
+                from_pagename, to_pagename)
+            print "  (page %s does not exist)" % to_pagename
+            continue
+
+        if slugify(from_pagename) == to_page.slug:
+            continue
+        if not Redirect.objects.filter(source=slugify(from_pagename)):
+            r = Redirect(source=slugify(from_pagename), destination=to_page)
+            r.save(user=u, comment="Automated edit. Creating redirect.")
+            print "Redirect %s --> %s created" % (from_pagename, to_pagename)
 
 
 def parse_wikitext(title, s):
@@ -66,11 +113,12 @@ def import_pages():
     response_list = request.query()['query']['allpages']
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
-    for mw_p in pages:
+    for mw_p in pages[:100]:
         print "Importing %s" % mw_p.title
-        if mw_p.isRedir():
-            handle_redirect(mw_p)
         wikitext = mw_p.getWikiText()
+        if mw_p.isRedir():
+            add_redirect(mw_p)
+            continue
         html = parse_wikitext(mw_p.title, wikitext)
 
         if Page.objects.filter(slug=slugify(mw_p.title)):
@@ -98,9 +146,15 @@ def clear_out_existing_data():
         p.delete(track_changes=False)
         for p_h in p.versions.all():
             p_h.delete()
+    for r in Redirect.objects.all():
+        print 'Clearing out', r
+        r.delete(track_changes=False)
+        for r_h in r.versions.all():
+            r_h.delete()
 
 
 def run():
     clear_out_existing_data()
     import_users()
     import_pages()
+    process_redirects()
