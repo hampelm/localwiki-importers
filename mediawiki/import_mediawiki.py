@@ -140,7 +140,6 @@ def _convert_to_string(l):
 
 
 def _is_wiki_page_url(href):
-    print SCRIPT_PATH
     if href.startswith(SCRIPT_PATH):
         return True
     else:
@@ -176,13 +175,23 @@ def _get_wiki_link(link):
 
 def fix_internal_links(tree):
     for elem in tree:
-        for link in elem.findall('a'):
+        for link in elem.findall('.//a'):
             pagename = _get_wiki_link(link)
             if pagename:
                 # Set href to quoted pagename and clear out other attributes
                 for k in link.attrib:
                     del link.attrib[k]
                 link.attrib['href'] = urllib.quote(pagename)
+    return tree
+
+
+def fix_basic_tags(tree):
+    for elem in tree:
+        # Replace i, b with em, strong.
+        for item in elem.findall('.//b'):
+            item.tag = 'strong'
+        for item in elem.findall('.//i'):
+            item.tag = 'em'
     return tree
 
 
@@ -196,6 +205,7 @@ def normalize_html(html):
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
     tree = fix_internal_links(tree)
+    tree = fix_basic_tags(tree)
     return _convert_to_string(tree)
 
 
