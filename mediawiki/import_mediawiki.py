@@ -195,6 +195,44 @@ def fix_basic_tags(tree):
     return tree
 
 
+def remove_edit_links(tree):
+    for elem in tree:
+        for item in elem.findall(".//span[@class='editsection']"):
+            item.tag = 'removeme'  # hack to easily remove a bunch of elements
+    return tree
+
+
+def remove_headline_labels(tree):
+    for elem in tree:
+        for parent in elem.getiterator():
+            for child in parent:
+                if (child.tag == 'span' and
+                    'mw-headline' in child.attrib.get('class', '').split()):
+                    parent.text = parent.text or ''
+                    parent.tail = parent.tail or ''
+                    if child.text:
+                        # We strip() here b/c mediawiki pads the text with a
+                        # space for some reason.
+                        parent.text += child.text.strip()
+                    if child.tail:
+                        parent.tail += child.tail
+                    child.tag = 'removeme'
+    return tree
+
+
+def remove_elements_tagged_for_removal(tree):
+    new_tree = []
+    for elem in tree:
+        if elem.tag == 'removeme':
+            continue
+        for parent in elem.getiterator():
+            for child in parent:
+                if child.tag == 'removeme':
+                    parent.remove(child)
+        new_tree.append(elem)
+    return new_tree
+
+
 def normalize_html(html):
     """
     This is the real workhorse.  We take an html string which represents
@@ -206,6 +244,10 @@ def normalize_html(html):
     tree = p.parseFragment(html, encoding='UTF-8')
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
+    tree = remove_edit_links(tree)
+    tree = remove_headline_labels(tree)
+
+    tree = remove_elements_tagged_for_removal(tree)
     return _convert_to_string(tree)
 
 
@@ -216,7 +258,7 @@ def import_pages():
         'action': 'query',
         'list': 'allpages',
     })
-    print "Getting master page list.."
+    print "Getting master page list (this may take a bit).."
     response_list = request.query()['query']['allpages']
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
@@ -227,6 +269,7 @@ def import_pages():
             add_redirect(mw_p)
             continue
         html = render_wikitext(mw_p.title, wikitext)
+        print html
 
         if Page.objects.filter(slug=slugify(mw_p.title)):
             # Page already exists with this slug.  This is probably because
@@ -239,8 +282,8 @@ def import_pages():
                 other_page.delete(track_changes=False)
 
         p = Page(name=mw_p.title, content=html)
+        p.content = normalize_html(p.content)
         p.clean_fields()
-        p.html = normalize_html(p.html)
         p.save()
 
 

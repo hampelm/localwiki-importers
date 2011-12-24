@@ -58,6 +58,16 @@ class TestHTMLNormalization(unittest.TestCase):
         expected_html = """<p>Some <em>text <strong>here</strong></em></p><p>and <em>then</em> <strong>some</strong> more</p>"""
         self.assertTrue(is_html_equal(normalize_html(html), expected_html))
 
+    def test_remove_headline_labels(self):
+        html = """<h2><span class="mw-headline" id="Water"> Water </span></h2>"""
+        expected_html = """<h2>Water</h2>"""
+        self.assertTrue(is_html_equal(normalize_html(html), expected_html))
+
+    def test_remove_edit_labels(self):
+        html = """<h2><span class="editsection">[<a href="/mediawiki-1.16.0/index.php?title=After-hours_emergency&amp;action=edit&amp;section=2" title="Edit section: Water">edit</a>]</span> <span class="mw-headline" id="Water"> Water </span></h2>"""
+        expected_html = """<h2>Water</h2>"""
+        self.assertTrue(is_html_equal(normalize_html(html), expected_html))
+
 
 def run():
     unittest.main()
