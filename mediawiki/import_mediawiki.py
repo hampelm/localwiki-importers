@@ -1,7 +1,8 @@
 import hashlib
 import html5lib
 from lxml import etree
-from urlparse import urljoin
+from urlparse import urljoin, urlsplit
+import urllib
 from html5lib import sanitizer
 from wikitools import *
 
@@ -13,14 +14,15 @@ def guess_api_endpoint(url):
 
 
 def guess_script_path(url):
-    if MEDIAWIKI_URL.endswith('.php'):
-        return MEDIAWIKI_URL
-    return urljoin(MEDIAWIKI_URL, '.')
+    mw_path = urlsplit(MEDIAWIKI_URL).path
+    if mw_path.endswith('.php'):
+        return mw_path
+    return urljoin(mw_path, '.')
 
 API_ENDPOINT = guess_api_endpoint(MEDIAWIKI_URL)
 
 site = wiki.Wiki(API_ENDPOINT)
-mediawiki_script_path = guess_script_path(MEDIAWIKI_URL)
+SCRIPT_PATH = guess_script_path(MEDIAWIKI_URL)
 redirects = []
 
 
@@ -137,7 +139,50 @@ def _convert_to_string(l):
     return s
 
 
+def _is_wiki_page_url(href):
+    print SCRIPT_PATH
+    if href.startswith(SCRIPT_PATH):
+        return True
+    else:
+        split_url = urlsplit(href)
+        # If this is a relative url and has 'index.php' in it we'll say
+        # it's a wiki link.
+        if not split_url.scheme and split_url.path.endswith('index.php'):
+            return True
+    return False
+
+
+def _get_wiki_link(link):
+    """
+    If the provided link is a wiki link then we return the name of the
+    page to link to.  If it's not a wiki link then we return None.
+    """
+    pagename = None
+    if 'href' in link.attrib:
+        href = link.attrib['href']
+        if _is_wiki_page_url(href):
+            title = link.attrib.get('title')
+            if 'new' in link.attrib.get('class', '').split():
+                # It's a link to a non-existent page, so we parse the
+                # page name from the title attribute in a really
+                # hacky way.  Titles for non-existent links look
+                # like <a ... title="Page name (page does not exist)">
+                pagename = title[:title.rfind('(') - 1]
+            else:
+                pagename = title
+
+    return pagename
+
+
 def fix_internal_links(tree):
+    for elem in tree:
+        for link in elem.findall('a'):
+            pagename = _get_wiki_link(link)
+            if pagename:
+                # Set href to quoted pagename and clear out other attributes
+                for k in link.attrib:
+                    del link.attrib[k]
+                link.attrib['href'] = urllib.quote(pagename)
     return tree
 
 

@@ -47,22 +47,12 @@ class TestHTMLNormalization(unittest.TestCase):
 <p>And now a link: <a href="/mediawiki-1.16.0/index.php/Ann_Arbor" title="Ann Arbor">Ann Arbor</a> woo!</p>"""
         expected_html = """<p>Some text here</p>
 <p>And now a link: <a href="Ann%20Arbor">Ann Arbor</a> woo!</p>"""
+        print normalize_html(html)
         self.assertTrue(is_html_equal(normalize_html(html), expected_html))
 
         # A link to a redirect in MW.
         html = """<a href="/mediawiki-1.16.0/index.php/Ypsilanti" title="Ypsilanti" class="mw-redirect">Ypsilanti</a>"""
         expected_html = """<a href="Ypsilanti">Ypsilanti</a>"""
-
-    #def test_choice(self):
-    #    element = random.choice(self.seq)
-    #    self.assertTrue(element in self.seq)
-
-    #def test_sample(self):
-    #    with self.assertRaises(ValueError):
-    #        random.sample(self.seq, 20)
-    #    for element in random.sample(self.seq, 5):
-    #        self.assertTrue(element in self.seq)
-
 
 def run():
     unittest.main()
