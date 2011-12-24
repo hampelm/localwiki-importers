@@ -202,6 +202,20 @@ def remove_edit_links(tree):
     return tree
 
 
+def throw_out_tags(tree):
+    throw_out = ['small']
+    for elem in tree:
+        for parent in elem.getiterator():
+            for child in parent:
+                if (child.tag in throw_out):
+                    parent.text = parent.text or ''
+                    parent.tail = parent.tail or ''
+                    if child.text:
+                        parent.text += (child.text + child.tail)
+                    child.tag = 'removeme'
+    return tree
+
+
 def remove_headline_labels(tree):
     for elem in tree:
         for parent in elem.getiterator():
@@ -213,9 +227,8 @@ def remove_headline_labels(tree):
                     if child.text:
                         # We strip() here b/c mediawiki pads the text with a
                         # space for some reason.
-                        parent.text += child.text.strip()
-                    if child.tail:
-                        parent.tail += child.tail
+                        tail = child.tail or ''
+                        parent.text += (child.text.strip() + tail)
                     child.tag = 'removeme'
     return tree
 
@@ -246,6 +259,7 @@ def normalize_html(html):
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
+    tree = throw_out_tags(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
     return _convert_to_string(tree)
@@ -257,9 +271,10 @@ def import_pages():
     request = api.APIRequest(site, {
         'action': 'query',
         'list': 'allpages',
+        'aplimit': '50',
     })
     print "Getting master page list (this may take a bit).."
-    response_list = request.query()['query']['allpages']
+    response_list = request.query(querycontinue=False)['query']['allpages']
     pages = pagelist.listFromQuery(site, response_list)
     print "Got master page list."
     for mw_p in pages[:100]:

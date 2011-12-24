@@ -68,6 +68,11 @@ class TestHTMLNormalization(unittest.TestCase):
         expected_html = """<h2>Water</h2>"""
         self.assertTrue(is_html_equal(normalize_html(html), expected_html))
 
+    def test_skip_small_tag(self):
+        html = """<p>this is some <small>small text</small> here.</p>"""
+        expected_html = """<p>this is some small text here.</p>"""
+        self.assertTrue(is_html_equal(normalize_html(html), expected_html))
+
 
 def run():
     unittest.main()
