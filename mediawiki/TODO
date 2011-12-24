@@ -1,0 +1,9 @@
+* Use http://127.0.0.1/mediawiki-1.16.0/api.php?action=query&prop=templates&titles=109%2C901
+  to figure out what templates are being used on a given page, and then
+  translate them to page includes.  This can be done for templates without
+  arguments.
+  
+  The API doesn't tell us whether or not a template has arguments,
+  but we can accomplish this by rendering the template and comparing the
+  resulting HTML to the HTML inside the rendered page.  If it's identical,
+  then we know we can replace it with an include.
