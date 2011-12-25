@@ -1,6 +1,7 @@
 import hashlib
 import html5lib
 from lxml import etree
+from xml.dom import minidom
 from urlparse import urljoin, urlsplit
 import urllib
 import re
@@ -115,16 +116,18 @@ def process_mapdata():
     # Page objects are created.
     global mapdata_objects_to_create
 
-    from mapdata.models import MapData
+    from maps.models import MapData
     from pages.models import Page, slugify
+    from django.contrib.gis.geos import Point, MultiPoint
 
     for item in mapdata_objects_to_create:
+        print "Adding mapdata for", item['pagename']
         p = Page.objects.get(slug=slugify(item['pagename']))
 
         mapdata = MapData.objects.filter(page=p)
-        y = item['lat']
-        x = item['lon']
-        point = Point(y, x)
+        y = float(item['lat'])
+        x = float(item['lon'])
+        point = Point(x, y)
         if mapdata:
             m = mapdata[0]
             points = m.points
@@ -288,31 +291,6 @@ def remove_elements_tagged_for_removal(tree):
     return new_tree
 
 
-def process_google_maps(tree, pagename):
-    """
-    If the MediaWiki install uses the google maps extension, import the
-    lat/long points associated with pages.
-    """
-    def _process(item):
-        lat = item.attrib.get('lat')
-        lon = item.attrib.get('lat')
-        item.tag = 'removeme'  # Tag for removal
-        if lat and lon:
-            # Save the lat/lon for later.  We can't create the
-            # MapData models until the Page models are all created.
-            d = {'pagename': pagename, 'lat': lat, 'lon': lon}
-            mapdata_objects_to_create.append(d)
-
-    for elem in tree:
-        if elem.tag == 'div' and elem.attrib.get('class') == 'mw:googlemap':
-            _process(elem)
-
-        for item in elem.findall(".//div[@class='mw:googlemap']"):
-            _process(item)
-
-    return tree
-
-
 def replace_mw_templates_with_includes(tree):
     """
     Replace {{templatethings}} inside of pages with our page include plugin.
@@ -329,17 +307,34 @@ def replace_mw_templates_with_includes(tree):
     # resulting HTML to the HTML inside the rendered page.  If it's identical,
     # then we know we can replace it with an include.
 
+    # TODO
+
     return tree
 
 
-def fix_non_html_elements(html):
+def process_non_html_elements(html, pagename):
     """
     Some MediaWiki extensions (e.g. google maps) output custom tags like
-    <googlemap>. We translate these to divs instead, so our HTML parser
-    doesn't translate them to quoted entities.
+    &lt;googlemap&gt;.  We process those here.
     """
-    html = re.sub('<googlemap', '<div class="mw:googlemap"', html)
-    html = re.sub('</googlemap>', '</div>', html)
+    def _repl_googlemap(match):
+        global mapdata_objects_to_create
+        xml = '<googlemap %s></googlemap>' % match.group('attribs')
+        dom = minidom.parseString(xml)
+        elem = dom.getElementsByTagName('googlemap')[0]
+        lon = elem.getAttribute('lon')
+        lat = elem.getAttribute('lat')
+
+        d = {'pagename': pagename, 'lat': lat, 'lon': lon}
+        mapdata_objects_to_create.append(d)
+
+        return ''  # Clear out the googlemap tag nonsense.
+
+    html = re.sub(
+        '(?P<map>&lt;googlemap (?P<attribs>.+?)&gt;'
+            '((.|\n)+?)'
+        '&lt;/googlemap&gt;)',
+        _repl_googlemap, html)
     return html
 
 
@@ -349,7 +344,7 @@ def process_html(html, pagename=None):
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
-    html = fix_non_html_elements(html)
+    html = process_non_html_elements(html, pagename)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
@@ -359,7 +354,6 @@ def process_html(html, pagename=None):
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
-    tree = process_google_maps(tree, pagename)
     tree = throw_out_tags(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
@@ -385,7 +379,6 @@ def import_pages():
             add_redirect(mw_p)
             continue
         html = render_wikitext(mw_p.title, wikitext)
-        print html
 
         if Page.objects.filter(slug=slugify(mw_p.title)):
             # Page already exists with this slug.  This is probably because

@@ -74,9 +74,10 @@ class TestHTMLNormalization(unittest.TestCase):
         self.assertTrue(is_html_equal(process_html(html), expected_html))
 
     def test_google_maps(self):
-        html = """<p>stuff</p><googlemap lat="42.243338" lon="-83.616152" zoom="19" scale="yes" overview="yes"> </googlemap>"""
+        html = """<p>stuff</p>&lt;googlemap lat="42.243338" lon="-83.616152" zoom="19" scale="yes" overview="yes"&gt; &lt;/googlemap&gt;"""
         expected_html = """<p>stuff</p>"""
         self.assertTrue(is_html_equal(process_html(html, "Test pagename"), expected_html))
+
 
 def run():
     unittest.main()
