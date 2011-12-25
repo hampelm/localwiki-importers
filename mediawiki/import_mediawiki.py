@@ -3,6 +3,7 @@ import html5lib
 from lxml import etree
 from urlparse import urljoin, urlsplit
 import urllib
+import re
 from html5lib import sanitizer
 from wikitools import *
 
@@ -24,6 +25,8 @@ API_ENDPOINT = guess_api_endpoint(MEDIAWIKI_URL)
 site = wiki.Wiki(API_ENDPOINT)
 SCRIPT_PATH = guess_script_path(MEDIAWIKI_URL)
 redirects = []
+include_pages_to_create = []
+mapdata_objects_to_create = []
 
 
 def get_robot_user():
@@ -107,6 +110,32 @@ def process_redirects():
             print "Redirect %s --> %s created" % (from_pagename, to_pagename)
 
 
+def process_mapdata():
+    # We create the MapData models here.  We can't create them until the
+    # Page objects are created.
+    global mapdata_objects_to_create
+
+    from mapdata.models import MapData
+    from pages.models import Page, slugify
+
+    for item in mapdata_objects_to_create:
+        p = Page.objects.get(slug=slugify(item['pagename']))
+
+        mapdata = MapData.objects.filter(page=p)
+        y = item['lat']
+        x = item['lon']
+        point = Point(y, x)
+        if mapdata:
+            m = mapdata[0]
+            points = m.points
+            points.append(point)
+            m.points = points
+        else:
+            points = MultiPoint(point)
+            m = MapData(page=p, points=points)
+        m.save()
+
+
 def render_wikitext(title, s):
     """
     Attrs:
@@ -174,22 +203,32 @@ def _get_wiki_link(link):
 
 
 def fix_internal_links(tree):
+    def _process(item):
+        pagename = _get_wiki_link(link)
+        if pagename:
+            # Set href to quoted pagename and clear out other attributes
+            for k in link.attrib:
+                del link.attrib[k]
+            link.attrib['href'] = urllib.quote(pagename)
+
     for elem in tree:
+        if elem.tag == 'a':
+            _process(elem)
         for link in elem.findall('.//a'):
-            pagename = _get_wiki_link(link)
-            if pagename:
-                # Set href to quoted pagename and clear out other attributes
-                for k in link.attrib:
-                    del link.attrib[k]
-                link.attrib['href'] = urllib.quote(pagename)
+            _process(link)
     return tree
 
 
 def fix_basic_tags(tree):
     for elem in tree:
         # Replace i, b with em, strong.
+        if elem.tag == 'b':
+            elem.tag = 'strong'
         for item in elem.findall('.//b'):
             item.tag = 'strong'
+
+        if elem.tag == 'i':
+            elem.tag = 'em'
         for item in elem.findall('.//i'):
             item.tag = 'em'
     return tree
@@ -197,6 +236,9 @@ def fix_basic_tags(tree):
 
 def remove_edit_links(tree):
     for elem in tree:
+        if (elem.tag == 'span' and
+            ('editsection' in elem.attrib.get('class').split())):
+            elem.tag = 'removeme'
         for item in elem.findall(".//span[@class='editsection']"):
             item.tag = 'removeme'  # hack to easily remove a bunch of elements
     return tree
@@ -246,19 +288,78 @@ def remove_elements_tagged_for_removal(tree):
     return new_tree
 
 
-def normalize_html(html):
+def process_google_maps(tree, pagename):
+    """
+    If the MediaWiki install uses the google maps extension, import the
+    lat/long points associated with pages.
+    """
+    def _process(item):
+        lat = item.attrib.get('lat')
+        lon = item.attrib.get('lat')
+        item.tag = 'removeme'  # Tag for removal
+        if lat and lon:
+            # Save the lat/lon for later.  We can't create the
+            # MapData models until the Page models are all created.
+            d = {'pagename': pagename, 'lat': lat, 'lon': lon}
+            mapdata_objects_to_create.append(d)
+
+    for elem in tree:
+        if elem.tag == 'div' and elem.attrib.get('class') == 'mw:googlemap':
+            _process(elem)
+
+        for item in elem.findall(".//div[@class='mw:googlemap']"):
+            _process(item)
+
+    return tree
+
+
+def replace_mw_templates_with_includes(tree):
+    """
+    Replace {{templatethings}} inside of pages with our page include plugin.
+
+    We can safely do this when the template doesn't have any arguments.
+    When it does have arguments we just import it as raw HTML for now.
+    """
+    # We use the API to figure out what templates are being used on a given
+    # page, and then translate them to page includes.  This can be done for
+    # templates without arguments.
+    #
+    # The API doesn't tell us whether or not a template has arguments,
+    # but we can figure this out by rendering the template and comparing the
+    # resulting HTML to the HTML inside the rendered page.  If it's identical,
+    # then we know we can replace it with an include.
+
+    return tree
+
+
+def fix_non_html_elements(html):
+    """
+    Some MediaWiki extensions (e.g. google maps) output custom tags like
+    <googlemap>. We translate these to divs instead, so our HTML parser
+    doesn't translate them to quoted entities.
+    """
+    html = re.sub('<googlemap', '<div class="mw:googlemap"', html)
+    html = re.sub('</googlemap>', '</div>', html)
+    return html
+
+
+def process_html(html, pagename=None):
     """
     This is the real workhorse.  We take an html string which represents
-    a rendered MediaWiki page and return cleaned up HTML.
+    a rendered MediaWiki page and process bits and pieces of it, normalize
+    elements / attributes and return cleaned up HTML.
     """
+    html = fix_non_html_elements(html)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
+    tree = replace_mw_templates_with_includes(tree)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
     tree = remove_headline_labels(tree)
+    tree = process_google_maps(tree, pagename)
     tree = throw_out_tags(tree)
 
     tree = remove_elements_tagged_for_removal(tree)
@@ -297,7 +398,7 @@ def import_pages():
                 other_page.delete(track_changes=False)
 
         p = Page(name=mw_p.title, content=html)
-        p.content = normalize_html(p.content)
+        p.content = process_html(p.content, p.name)
         p.clean_fields()
         p.save()
 
@@ -327,3 +428,4 @@ def run():
     import_users()
     import_pages()
     process_redirects()
+    process_mapdata()
