@@ -561,7 +561,7 @@ class Formatter(sycamore_HTMLFormatter):
             'include_classes': include_classes,
             'pagename': page_name,
         }
-        include_html = """<a%(width_style)s href="%(quoted_pagename)s" class="plugin includepage%(include_classes)s">Include page %(pagename)s</a></p>""" % d
+        include_html = """<a%(width_style)s href="%(quoted_pagename)s" class="plugin includepage%(include_classes)s">Include page %(pagename)s</a>""" % d
         return include_html
 
     def process_mailto_macro(self, macro_obj, name, args):
@@ -973,7 +973,7 @@ def remove_ridicilous_indents(s):
             continue
         if e.tag == 'ul':
             children = list(e.iterchildren())
-            if children and children[0] != 'li' and children[0] != 'p':
+            if children and children[0].tag != 'li' and children[0].tag != 'p':
                 # push everything to the top-level
                 new_top_level += children
                 continue
