@@ -291,12 +291,33 @@ def remove_elements_tagged_for_removal(tree):
     return new_tree
 
 
-def replace_mw_templates_with_includes(tree):
+def _get_templates_on_page(pagename):
+    pass
+
+
+def _render_template(template):
+    pass
+
+
+def create_mw_template_as_page(template):
+    """
+    Create a page to hold the rendered template.
+
+    Returns:
+        String representing the pagename of the new include-able page.
+    """
+    pass
+
+
+def replace_mw_templates_with_includes(html, pagename):
     """
     Replace {{templatethings}} inside of pages with our page include plugin.
 
     We can safely do this when the template doesn't have any arguments.
     When it does have arguments we just import it as raw HTML for now.
+
+    Returns:
+        html string.
     """
     # We use the API to figure out what templates are being used on a given
     # page, and then translate them to page includes.  This can be done for
@@ -307,9 +328,23 @@ def replace_mw_templates_with_includes(tree):
     # resulting HTML to the HTML inside the rendered page.  If it's identical,
     # then we know we can replace it with an include.
 
-    # TODO
+    templates = _get_templates_on_page(pagename)
+    for template in templates:
+        template_html = _render_template(template)
+        if template_html in html:
+            # It's an include-style template.
+            include_pagename = create_mw_template_as_page(template)
+            include_html = (
+                '<a href="%(quoted_pagename)s" '
+                 'class="plugin includepage%(include_classes)s">'
+                 'Include page %(pagename)s'
+                '</a>' % {
+                    'quoted_pagename': urllib.quote(include_pagename),
+                    'pagename': include_pagename}
+            )
+            html = html.replace(template_html, include_html)
 
-    return tree
+    return html
 
 
 def process_non_html_elements(html, pagename):
@@ -344,12 +379,12 @@ def process_html(html, pagename=None):
     a rendered MediaWiki page and process bits and pieces of it, normalize
     elements / attributes and return cleaned up HTML.
     """
+    html = replace_mw_templates_with_includes(html, pagename)
     html = process_non_html_elements(html, pagename)
     p = html5lib.HTMLParser(tokenizer=html5lib.sanitizer.HTMLSanitizer,
             tree=html5lib.treebuilders.getTreeBuilder("lxml"),
             namespaceHTMLElements=False)
     tree = p.parseFragment(html, encoding='UTF-8')
-    tree = replace_mw_templates_with_includes(tree)
     tree = fix_internal_links(tree)
     tree = fix_basic_tags(tree)
     tree = remove_edit_links(tree)
