@@ -51,7 +51,8 @@ def import_users():
     })
     for item in request.query()['query']['allusers']:
         username = item['name'][:30]
-
+        username = username.decode('utf-8','replace')
+        
         # TODO: how do we get their email address here? I don't think
         # it's available via the API. Maybe we'll have to fill in the
         # users' emails in a separate step.
