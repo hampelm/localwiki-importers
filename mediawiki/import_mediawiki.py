@@ -330,6 +330,9 @@ def replace_mw_templates_with_includes(html, pagename):
     # then we know we can replace it with an include.
 
     templates = _get_templates_on_page(pagename)
+    if not templates:
+        return html
+
     for template in templates:
         template_html = _render_template(template)
         if template_html in html:
